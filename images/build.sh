@@ -9,7 +9,7 @@ RAWHIDE_RELEASE=rawhide
 FEDORA_CURRENT_RELEASE=44
 PRIOR_FEDORA_RELEASE=43
 
-CURL="curl --location --silent --fail --show-error"
+CURL="curl --location --silent --fail --show-error --retry 5"
 
 function verify_fedora() {
     # verify the image download according to fedora docs here: https://fedoraproject.org/cloud/download/
