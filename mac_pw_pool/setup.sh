@@ -89,9 +89,6 @@ if [[ ! -x /usr/local/bin/gvproxy ]]; then
     )
 
     brew_formulas=(
-        # Necessary for worker-pool participation + task execution
-        cirruslabs/cli/cirrus
-
         # Necessary for building podman|buildah|skopeo
         go go-md2man coreutils pkg-config pstree gpgme
 
@@ -103,6 +100,9 @@ if [[ ! -x /usr/local/bin/gvproxy ]]; then
 
         # Necessary for podman-machine libkrun CI testing
         krunkit
+
+        # Necessary for GitHub Actions runner and API calls
+        jq
     )
 
     # msg() includes a ##### prefix, ensure this text is simply
@@ -122,6 +122,31 @@ if [[ ! -x /usr/local/bin/gvproxy ]]; then
     curl -sSLfO "$GVPROXY_RELEASE_URL"
     sudo install -o root -g staff -m 0755 gvproxy-darwin /usr/local/bin/gvproxy
     rm gvproxy-darwin
+fi
+
+msg "Installing GitHub Actions runner v2.334.0"
+# Install runner in worker user's home directory
+RUNNER_DIR="/Users/$PWUSER/actions-runner"
+if [[ ! -d "$RUNNER_DIR" ]]; then
+    sudo mkdir -p "$RUNNER_DIR"
+    cd "$RUNNER_DIR"
+
+    # Download GitHub Actions runner
+    msg "Downloading runner from GitHub"
+    sudo curl -sSLfO "https://github.com/actions/runner/releases/download/v2.334.0/actions-runner-osx-arm64-2.334.0.tar.gz"
+
+    # Verify hash
+    echo "760899b29fd4e942076bcd1160a662bf83c15d9ce8a8cc466763aec7e582b21b  actions-runner-osx-arm64-2.334.0.tar.gz" | shasum -a 256 -c || \
+        die "Runner tarball hash verification failed"
+
+    # Extract runner
+    sudo tar xzf actions-runner-osx-arm64-2.334.0.tar.gz
+    sudo rm actions-runner-osx-arm64-2.334.0.tar.gz
+
+    # Set ownership to worker user
+    sudo chown -R $PWUSER:staff "$RUNNER_DIR"
+
+    cd $HOME
 fi
 
 msg "Setting up hostname"
@@ -210,38 +235,39 @@ if [[ ! -L /usr/local/bin/softwareupdate ]]; then
     sudo ln -sf /usr/bin/false /usr/local/bin/softwareupdate
 fi
 
-# FIXME: Semi-secret POOLTOKEN value should not be in this file.
-# ref: https://github.com/cirruslabs/cirrus-cli/discussions/662
-cat << EOF | sudo tee $PWCFG > /dev/null
----
-name: "$PWNAME"
-token: "$POOLTOKEN"
-labels:
-  $1
-log:
-  file: "${PWLOG}"
-security:
-  allowed-isolations:
-    none: {}
-EOF
-sudo chown ${USER}:staff $PWCFG
+msg "Registering GitHub Actions runner '$PWNAME'"
+# Register runner with GitHub (requires GITHUB_TOKEN env var)
+[[ -n "$GITHUB_TOKEN" ]] || \
+    die "GITHUB_TOKEN environment variable must be set"
 
-# Monitored by instance launch script
+# Runner registration happens in worker user's directory
+RUNNER_DIR="/Users/$PWUSER/actions-runner"
+cd "$RUNNER_DIR"
+
+# Call registration script as worker user
+sudo -u $PWUSER -E /var/tmp/register_runner.sh "$PWNAME" || \
+    die "Failed to register runner"
+
+cd $HOME
+
+# Create log file for runner output (monitored by instance launch script)
+PWLOG="/private/tmp/${PWNAME}-runner.log"
 echo "# Log created $(date -u -Iseconds) - do not manually remove or modify!" > $PWLOG
 sudo chown ${USER}:staff $PWLOG
 sudo chmod g+rw $PWLOG
 
 if ! pgrep -q -f service_pool.sh; then
     # Allow service_pool.sh access to these values
-    export PWCFG
     export PWUSER
+    export PWNAME
     export PWREADYURL
     export PWREADY
-    msg "Spawning listener supervisor process."
+    export PWLOG
+    msg "Spawning runner supervisor process."
     /var/tmp/service_pool.sh </dev/null >>setup.log 2>&1 &
     disown %-1
 else
-    msg "Warning: Listener supervisor already running"
+    msg "Warning: Runner supervisor already running"
 fi
 
 # Monitored by instance launch script

@@ -64,6 +64,18 @@ SETUP_SCRIPT="$LIB_DIRPATH/setup.sh"
 SPOOL_SCRIPT="$LIB_DIRPATH/service_pool.sh"
 SHDWN_SCRIPT="$LIB_DIRPATH/shutdown.sh"
 CIENV_SCRIPT="$LIB_DIRPATH/ci_env.sh"
+REGISTER_SCRIPT="$LIB_DIRPATH/register_runner.sh"
+
+# GitHub Actions runner configuration
+GITHUB_ORG="podman-io"
+GITHUB_RUNNER_GROUP="mac-pool"
+GITHUB_RUNNER_LABELS="self-hosted,macOS,ARM64,github"
+GITHUB_RUNNER_VERSION="2.334.0"
+GITHUB_RUNNER_ARCH="osx-arm64"
+GITHUB_RUNNER_TARBALL="actions-runner-${GITHUB_RUNNER_ARCH}-${GITHUB_RUNNER_VERSION}.tar.gz"
+GITHUB_RUNNER_URL="https://github.com/actions/runner/releases/download/v${GITHUB_RUNNER_VERSION}/${GITHUB_RUNNER_TARBALL}"
+GITHUB_RUNNER_SHA256="760899b29fd4e942076bcd1160a662bf83c15d9ce8a8cc466763aec7e582b21b"
+GITHUB_RUNNER_DIR="/Users/actions-runner"
 
 # Set to 1 to enable debugging
 X_DEBUG="${X_DEBUG:-0}"
