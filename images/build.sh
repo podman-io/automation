@@ -157,4 +157,8 @@ virt-customize --smp ${VM_CORES} --memsize ${VM_MEMORY} \
 echo "Build logs:"
 virt-cat -a "$image_path" /tmp/builder.log
 
-echo "Successful build $image_name"
+echo "Compressing the image with zstd"
+# zst compress to safe space
+zstd -19 -T0 $image_path $image_path.zst
+
+echo "Successful build $image_name.zst"
