@@ -26,8 +26,6 @@ PWREADYURL="http://instance-data/latest/meta-data/tags/instance/PWPoolReady"
 PWREADY=$(curl -sSLf $PWREADYURL)
 
 PWUSER=$PWNAME-worker
-rm -f /private/tmp/*_cfg_*
-PWCFG=$(mktemp /private/tmp/${PWNAME}_cfg_XXXXXXXX)
 PWLOG="/private/tmp/${PWUSER}.log"
 
 msg() { echo "##### ${1:-No message message provided}"; }
@@ -201,6 +199,35 @@ if [[ ! -d "$RUNNER_DIR" ]]; then
     rm "$RUNNER_FILE"
 fi
 
+msg "Registering GitHub Actions runner"
+RUNNER_CONFIG_FILE="$RUNNER_DIR/.runner"
+if [[ ! -r "$RUNNER_CONFIG_FILE" ]]; then
+    [[ -n "$GITHUB_TOKEN" ]] || \
+        die "GITHUB_TOKEN environment variable is not set"
+
+    # Get a registration token from GitHub
+    msg "Obtaining runner registration token from GitHub"
+    REGISTRATION_TOKEN=$(curl -sS -X POST \
+        -H "Authorization: token $GITHUB_TOKEN" \
+        -H "Accept: application/vnd.github+json" \
+        https://api.github.com/orgs/podman-io/actions/runners/registration-token \
+        | jq -r '.token')
+
+    [[ -n "$REGISTRATION_TOKEN" ]] && [[ "$REGISTRATION_TOKEN" != "null" ]] || \
+        die "Failed to obtain registration token from GitHub API"
+
+    msg "Registering runner '$PWNAME'"
+    # Configure the runner (but don't start it - service_pool.sh will do that)
+    # Work directory matches Cirrus pattern: /Users/$PWUSER/ci
+    sudo -u $PWUSER bash -c "cd $RUNNER_DIR && ./config.sh \
+        --unattended \
+        --url https://github.com/podman-io \
+        --token $REGISTRATION_TOKEN \
+        --name $PWNAME \
+        --runnergroup mac-pool \
+        --work /Users/$PWUSER/ci"
+fi
+
 msg "Setting up Rosetta"
 # Rosetta 2 enables arm64 Mac to use Intel Apps.  Only install if not present.
 if ! arch -arch x86_64 /usr/bin/uname -m; then
@@ -234,10 +261,10 @@ sudo chmod g+rw $PWLOG
 
 if ! pgrep -q -f service_pool.sh; then
     # Allow service_pool.sh access to these values
-    export PWCFG
     export PWUSER
     export PWREADYURL
     export PWREADY
+    export GITHUB_TOKEN
     msg "Spawning listener supervisor process."
     /var/tmp/service_pool.sh </dev/null >>setup.log 2>&1 &
     disown %-1
