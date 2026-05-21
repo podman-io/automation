@@ -1,8 +1,8 @@
 name: Test OCI OIDC Upload
 
-# TEMPORARY workflow used to verify the OCI OIDC auth + upload flow
-# without having to push a real release tag. Delete this file once
-# the release.yml flow has been proven to work end-to-end.
+# TEMPORARY workflow to verify the OCI OIDC auth + upload flow against
+# a real GitHub OIDC token, without waiting on the full image build.
+# Delete this file once the production release.yml is proven to work.
 
 on:
   push:
@@ -10,13 +10,18 @@ on:
       - oci-oidc-upload
   workflow_dispatch:
 
+# Cancel any in-flight run on this branch when a new push arrives.
+concurrency:
+  group: test-oci-oidc-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   test-upload:
-    runs-on: oracle-vm-16cpu-64gb-x86-64
-    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       id-token: write
     env:
@@ -30,19 +35,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Create dummy .zst file to upload
+      - name: Create dummy .zst marker file
         env:
           RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          date -u +'test-marker-%Y%m%dT%H%M%SZ' > test-marker.txt
-          echo "run_id=${RUN_ID}" >> test-marker.txt
-          if command -v zstd >/dev/null 2>&1; then
-            zstd -19 test-marker.txt -o test-marker.txt.zst
-          else
-            cp test-marker.txt test-marker.txt.zst
-          fi
-          ls -la test-marker.txt*
+          printf 'oci-oidc-test marker\nrun_id=%s\nutc=%s\n' "$RUN_ID" "$(date -u -Iseconds)" \
+            > test-marker.zst
+          ls -la test-marker.zst
 
       - name: Upload via composite action
         uses: ./.github/actions/oci-oidc-upload
