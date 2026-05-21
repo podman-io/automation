@@ -68,11 +68,24 @@ runs:
         #    IDCS confidential apps allow jwt-bearer grant (RFC 7523); adding
         #    requested_token_type=oci-upst + public_key transforms the response
         #    into a UPST bound to our ephemeral keypair (via IdentityPropagationTrust).
+        # Decode JWT header+payload (not signature) for visibility into claims.
+        echo "--- GH JWT claims (header.payload, signature redacted) ---"
+        python3 -c "
+import sys, base64, json
+parts = sys.argv[1].split('.')
+for label, part in zip(('header','payload'), parts[:2]):
+    pad = '=' * (-len(part) % 4)
+    decoded = json.loads(base64.urlsafe_b64decode(part + pad))
+    print(label + ':', json.dumps({k: decoded[k] for k in decoded if k not in ('actor_id','runner_environment','iat','nbf','exp','jti')}, indent=2))
+" "$GH_JWT"
+        echo "--- end JWT ---"
+
         STATUS="$(curl -sSL -o /tmp/upst-body.txt -w '%{http_code}' \
           -u "${OCI_CLIENT_ID}:${OCI_CLIENT_SECRET}" \
           -H 'Content-Type: application/x-www-form-urlencoded' \
           -d 'grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer' \
           -d 'requested_token_type=urn:oci:token-type:oci-upst' \
+          -d 'scope=urn:opc:idm:__myscopes__' \
           -d "public_key=${PUBKEY_B64}" \
           --data-urlencode "assertion=${GH_JWT}" \
           "${OCI_DOMAIN_URL%/}/oauth2/v1/token")"
