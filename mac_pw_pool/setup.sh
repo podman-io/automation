@@ -86,9 +86,6 @@ if [[ ! -x /usr/local/bin/gvproxy ]]; then
     )
 
     brew_formulas=(
-        # Necessary for worker-pool participation + task execution
-        cirruslabs/cli/cirrus
-
         # Necessary for building podman|buildah|skopeo
         go go-md2man coreutils pkg-config pstree gpgme
 
@@ -100,6 +97,9 @@ if [[ ! -x /usr/local/bin/gvproxy ]]; then
 
         # Necessary for podman-machine libkrun CI testing
         krunkit
+
+        # Necessary for GitHub API calls
+        jq
     )
 
     # msg() includes a ##### prefix, ensure this text is simply
@@ -179,6 +179,26 @@ if ! mount | grep -q "$PWUSER"; then
     # User likely has pre-existing system processes trying to use
     # the (now) over-mounted home directory.
     sudo pkill -u $PWUSER || true
+fi
+
+msg "Installing GitHub Actions runner"
+RUNNER_DIR="/Users/$PWUSER/actions-runner"
+if [[ ! -d "$RUNNER_DIR" ]]; then
+    # Get the latest runner version for macOS ARM64
+    RUNNER_VERSION=$(curl -sS https://api.github.com/repos/actions/runner/releases/latest | jq -r '.tag_name' | sed 's/^v//')
+    RUNNER_FILE="actions-runner-osx-arm64-${RUNNER_VERSION}.tar.gz"
+    RUNNER_URL="https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/${RUNNER_FILE}"
+
+    msg "Downloading GitHub Actions runner v${RUNNER_VERSION}"
+    curl -sSLfO "$RUNNER_URL"
+
+    # Create runner directory owned by the worker user
+    sudo mkdir -p "$RUNNER_DIR"
+    sudo chown $PWUSER:staff "$RUNNER_DIR"
+
+    # Extract as the worker user
+    sudo -u $PWUSER tar xzf "$RUNNER_FILE" -C "$RUNNER_DIR"
+    rm "$RUNNER_FILE"
 fi
 
 msg "Setting up Rosetta"
