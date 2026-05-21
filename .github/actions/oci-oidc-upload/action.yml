@@ -56,9 +56,13 @@ runs:
         chmod 700 "$HOME/.oci/sessions/github"
         openssl genrsa -out "$HOME/.oci/sessions/github/oci_api_key.pem" 2048
         chmod 600 "$HOME/.oci/sessions/github/oci_api_key.pem"
-        PUBKEY_B64="$(openssl rsa \
+        # IDCS expects the PEM-encoded public key, base64-wrapped (single line).
+        openssl rsa \
           -in "$HOME/.oci/sessions/github/oci_api_key.pem" \
-          -pubout -outform DER 2>/dev/null | base64 -w0)"
+          -pubout -outform PEM \
+          -out "$HOME/.oci/sessions/github/oci_api_key_public.pem" 2>/dev/null
+        PUBKEY_B64="$(base64 -w0 < "$HOME/.oci/sessions/github/oci_api_key_public.pem")"
+        echo "Public key length (b64 chars): ${#PUBKEY_B64}"
 
         # 3. Exchange the GitHub JWT for an OCI User Principal Session Token.
         #    IDCS confidential apps allow jwt-bearer grant (RFC 7523); adding
