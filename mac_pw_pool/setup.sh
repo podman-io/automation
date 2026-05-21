@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# Setup and launch Cirrus-CI PW Pool node.  It must be called
-# with the env. var. `$POOLTOKEN` set.  It is assumed to be
+# Setup and launch GitHub Actions runner node.  It must be called
+# with the env. var. `$GITHUB_TOKEN` set.  It is assumed to be
 # running on a fresh AWS EC2 mac2.metal instance as `ec2-user`
 # The instance must have both "metadata" and "Allow tags in
 # metadata" options enabled.  The instance must set the
 # "terminate" option for "shutdown behavior".
 #
 # This script should be called with a single argument string,
-# of the label YAML to configure.  For example "purpose: prod"
+# of the runner label to configure.  For example "purpose: prod"
 #
 # N/B: Under special circumstances, this script (possibly with modifications)
 # can be executed more than once.  All operations which modify state/config.
@@ -39,9 +39,6 @@ die_if_empty() {
     [[ -n "$tagname" ]] || \
         die "Unexpectedly empty instance '$tagname' tag, is metadata tag access enabled?"
 }
-
-[[ -n "$POOLTOKEN" ]] || \
-    die "Must be called with non-empty \$POOLTOKEN set."
 
 [[ "$#" -ge 1 ]] || \
     die "Must be called with a 'label: value' string argument"
@@ -209,22 +206,6 @@ if [[ ! -L /usr/local/bin/softwareupdate ]]; then
     # in $PATH, deploy a really fragile hack as an imperfect workaround.
     sudo ln -sf /usr/bin/false /usr/local/bin/softwareupdate
 fi
-
-# FIXME: Semi-secret POOLTOKEN value should not be in this file.
-# ref: https://github.com/cirruslabs/cirrus-cli/discussions/662
-cat << EOF | sudo tee $PWCFG > /dev/null
----
-name: "$PWNAME"
-token: "$POOLTOKEN"
-labels:
-  $1
-log:
-  file: "${PWLOG}"
-security:
-  allowed-isolations:
-    none: {}
-EOF
-sudo chown ${USER}:staff $PWCFG
 
 # Monitored by instance launch script
 echo "# Log created $(date -u -Iseconds) - do not manually remove or modify!" > $PWLOG
