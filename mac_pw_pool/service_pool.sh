@@ -34,14 +34,15 @@ sudo pkill -u $PWUSER -f "Runner.Listener" || true
 # envar exported to us
 # shellcheck disable=SC2154
 RUNNER_DIR="/Users/$PWUSER/actions-runner"
+PWLOG="/private/tmp/${PWUSER}.log"
 
 while [[ "$PWREADY" == "true" ]]; do  # Change tag to shutdown this "service"
     # The $PWUSER has access to kill it's own listener, or it could crash.
     if ! pgrep -u $PWUSER -f -q "Runner.Listener"; then
         msg "$(date -u -Iseconds) Starting GitHub Actions runner as $PWUSER"
-        # This is intended for user's setup.log
+        # Runner output logged to dedicated worker log file
         # shellcheck disable=SC2024
-        sudo su -l $PWUSER -c "cd $RUNNER_DIR && ./run.sh &" >>setup.log 2>&1 &
+        sudo su -l $PWUSER -c "cd $RUNNER_DIR && ./run.sh &" >>$PWLOG 2>&1 &
         sleep 10  # eek!
     fi
 
