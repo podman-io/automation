@@ -258,12 +258,29 @@ for _dhentry in "${_dhstate[@]}"; do
             dbg "Attempting to stop shutdown sleep "
             $SSH ec2-user@$pub_dns pkill -u ec2-user -f "'bash -c sleep'"
 
+            dbg "Stopping service_pool.sh to prevent listener restart"
             if $SSH ec2-user@$pub_dns pgrep -u ec2-user -f service_pool.sh; then
+                $SSH ec2-user@$pub_dns pkill -u ec2-user -f service_pool.sh
                 sleep 10s  # Allow service_pool to exit gracefully
             fi
 
-            # N/B: This will not stop any currently running CI jobs.
-            dbg "Guarantee runner is dead"
+            # Wait gracefully for any running jobs to complete before killing listener
+            dbg "Checking for running jobs"
+            if $SSH ec2-user@$pub_dns pgrep -u ${name}-worker -q -f "'Runner.Worker'"; then
+                timeout_seconds=$((60*60*2))  # 2 hours, same as shutdown.sh
+                wait_start=$(date +%s)
+                timeout_at=$((wait_start + timeout_seconds))
+                pwst_msg "Job currently running, waiting for completion (up to 2 hours)..."
+                while $SSH ec2-user@$pub_dns pgrep -u ${name}-worker -q -f "'Runner.Worker'"; do
+                    if [[ $(date +%s) -gt $timeout_at ]]; then
+                        pwst_warn "Timeout waiting for running job to complete after 2 hours"
+                        break
+                    fi
+                    sleep 60
+                done
+            fi
+
+            dbg "No running jobs detected, stopping listener"
             $SSH ec2-user@$pub_dns sudo pkill -u ${name}-worker -f "'Runner.Listener'"
         )
         continue
@@ -283,7 +300,7 @@ for _dhentry in "${_dhstate[@]}"; do
             # don't play nicely with zsh.
             $SSH ec2-user@$pub_dns sudo chsh -s /bin/bash ec2-user &> /dev/null
 
-            if ! $SCP $SETUP_SCRIPT $SPOOL_SCRIPT $SHDWN_SCRIPT ec2-user@$pub_dns:/var/tmp/; then
+            if ! $SCP $SETUP_SCRIPT $SPOOL_SCRIPT $SHDWN_SCRIPT $CLEANUP_SCRIPT ec2-user@$pub_dns:/var/tmp/; then
                 pwst_warn "Could not scp scripts to instance $(ctx 0)."
                 continue  # try again next loop
             fi

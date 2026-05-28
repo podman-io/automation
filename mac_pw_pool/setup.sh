@@ -219,6 +219,12 @@ if [[ ! -d "$RUNNER_DIR" ]] || [[ ! -x "$RUNNER_DIR/config.sh" ]]; then
     rm "$RUNNER_FILE"
 fi
 
+msg "Installing cleanup script"
+CLEANUP_SCRIPT="/var/tmp/cleanup.sh"
+if [[ ! -r "$CLEANUP_SCRIPT" ]]; then
+    die "Cleanup script not found at $CLEANUP_SCRIPT"
+fi
+
 msg "Registering GitHub Actions runner"
 RUNNER_CONFIG_FILE="$RUNNER_DIR/.runner"
 if [[ ! -r "$RUNNER_CONFIG_FILE" ]]; then
@@ -234,6 +240,13 @@ if [[ ! -r "$RUNNER_CONFIG_FILE" ]]; then
         --name $PWNAME \
         --runnergroup mac-pool \
         --work /Users/$PWUSER/ci"
+
+    # Configure job hooks for pre/post cleanup
+    msg "Configuring job hooks"
+    sudo -u $PWUSER bash -c "cat > $RUNNER_DIR/.env" <<'EOF'
+ACTIONS_RUNNER_HOOK_JOB_STARTED=/var/tmp/cleanup.sh
+ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/var/tmp/cleanup.sh
+EOF
 fi
 
 msg "Setting up Rosetta"
