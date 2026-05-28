@@ -12,17 +12,17 @@ PWNAME=$(uname -n)
 PWUSER=$PWNAME-worker
 
 if id -u "$PWUSER" &> /dev/null; then
-    # Try to not reboot while a CI task is running.
-    # Cirrus-CI imposes a hard-timeout of 2-hours.
+    # Try to not reboot while a CI job is running.
+    # GitHub Actions imposes a configurable timeout (default 2-hours for self-hosted runners).
     now=$(date -u +%s)
     timeout_at=$((now+60*60*2))
-    echo "Waiting up to 2 hours for any pre-existing cirrus agent (i.e. running task)"
-    while pgrep -u $PWUSER -q -f "cirrus-ci-agent"; do
+    echo "Waiting up to 2 hours for any pre-existing GitHub Actions worker (i.e. running job)"
+    while pgrep -u $PWUSER -q -f "Runner.Worker"; do
         if [[ $(date -u +%s) -gt $timeout_at ]]; then
-            echo "Timeout waiting for cirrus-ci-agent to terminate"
+            echo "Timeout waiting for Runner.Worker to terminate"
             break
         fi
-        echo "Found cirrus-ci-agent still running, waiting..."
+        echo "Found Runner.Worker still running, waiting..."
         sleep 60
     done
 fi

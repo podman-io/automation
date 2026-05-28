@@ -14,7 +14,7 @@
 # 59   4    * * * $HOME/devel/automation/mac_pw_pool/nightly_maintenance.sh &>> $CRONLOG
 #
 # # PW Pool management (usage drop-off from 03:00-15:00 UTC)
-# POOLTOKEN=<from https://cirrus-ci.com/pool/1cf8c7f7d7db0b56aecd89759721d2e710778c523a8c91c7c3aaee5b15b48d05>
+# GITHUB_TOKEN=<GitHub Personal Access Token with org:self-hosted-runners scope>
 # CRONLOG=/home/shared/devel/automation/mac_pw_pool/Cron.log
 # */5  *    * * * /home/shared/devel/automation/mac_pw_pool/Cron.sh &>> $CRONLOG
 

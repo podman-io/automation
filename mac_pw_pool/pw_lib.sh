@@ -64,6 +64,7 @@ SETUP_SCRIPT="$LIB_DIRPATH/setup.sh"
 SPOOL_SCRIPT="$LIB_DIRPATH/service_pool.sh"
 SHDWN_SCRIPT="$LIB_DIRPATH/shutdown.sh"
 CIENV_SCRIPT="$LIB_DIRPATH/ci_env.sh"
+CLEANUP_SCRIPT="$LIB_DIRPATH/cleanup.sh"
 
 # Set to 1 to enable debugging
 X_DEBUG="${X_DEBUG:-0}"

@@ -18,8 +18,8 @@
 # * The `aws` CLI tool is installed on $PATH.
 # * Appropriate `~/.aws/credentials` credentials are setup.
 # * The us-east-1 region is selected in `~/.aws/config`.
-# * The $POOLTOKEN env. var. is set to value available from
-#   https://cirrus-ci.com/pool/1cf8c7f7d7db0b56aecd89759721d2e710778c523a8c91c7c3aaee5b15b48d05
+# * The $GITHUB_TOKEN env. var. is set to a GitHub Personal Access Token
+#   with org:self-hosted-runners scope for the podman-container-tools organization
 # * The local ssh-agent is able to supply the appropriate private key (stored in BW).
 
 set -eo pipefail
@@ -39,8 +39,8 @@ dbg "\$USER=$USER"
 [[ -n "$USER" ]] || \
     die "The variable \$USER must not be empty"
 
-[[ -n "$POOLTOKEN" ]] || \
-    die "The variable \$POOLTOKEN must not be empty"
+[[ -n "$GITHUB_TOKEN" ]] || \
+    die "The variable \$GITHUB_TOKEN must not be empty"
 
 INST_NAME="${USER}Testing"
 LIB_DIRNAME=$(realpath --relative-to=$REPO_DIRPATH $LIB_DIRPATH)
@@ -194,7 +194,7 @@ instance with any 'persistent_worker' task having a label of
 msg "---"
 warn "$w"
 
-export POOLTOKEN  # ensure availability in sub-shell
+export GITHUB_TOKEN  # ensure availability in sub-shell
 bash -l
 
 warn "$w"

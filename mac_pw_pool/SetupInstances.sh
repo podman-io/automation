@@ -3,14 +3,14 @@
 set -eo pipefail
 
 # Script intended to be executed by humans (and eventually automation)
-# to provision any/all accessible Cirrus-CI Persistent Worker instances
+# to provision any/all accessible GitHub Actions runner instances
 # as they become available.  This is intended to operate independently
 # from `LaunchInstances.sh` soas to "hide" the nearly 2-hours of cumulative
 # startup and termination wait times.  This script depends on:
 #
 # * All requirements listed in the top `LaunchInstances.sh` comment.
 # * The $DHSTATE file created/updated by `LaunchInstances.sh`.
-# * The $POOLTOKEN env. var. is defined
+# * The $GITHUB_TOKEN env. var. is defined
 # * The local ssh-agent is able to supply the appropriate private key.
 
 # shellcheck source-path=SCRIPTDIR
@@ -41,14 +41,13 @@ set_pw_status() {
 pwst_msg() { set_pw_status comment "$1"; msg "$1"; }
 pwst_warn() { set_pw_status comment "$1"; warn "$1"; }
 
-# Attempt to signal $SPOOL_SCRIPT to stop picking up new CI tasks but
+# Attempt to signal $SPOOL_SCRIPT to stop picking up new CI jobs but
 # support PWPoolReady being reset to 'true' in the future to signal
 # a new $SETUP_SCRIPT run.  Cancel future $SHDWN_SCRIPT action.
 # Requires both $pub_dns and $name are set
 stop_listener(){
-    dbg "Attempting to stop pool listener and reset setup state"
+    dbg "Attempting to stop runner and reset setup state"
     $SSH ec2-user@$pub_dns rm -f \
-        "/private/tmp/${name}_cfg_*" \
         "./.setup.done" \
         "./.setup.started" \
         "/var/tmp/shutdown.sh"
@@ -98,8 +97,8 @@ if ((S_DEBUG)); then
     trap EXIT
 fi
 
-[[ -n "$POOLTOKEN" ]] || \
-    die "Expecting \$POOLTOKEN to be defined/non-empty $(ctx 0)."
+[[ -n "$GITHUB_TOKEN" ]] || \
+    die "Expecting \$GITHUB_TOKEN to be defined/non-empty $(ctx 0)."
 
 [[ -r "$DHSTATE" ]] || \
     die "Can't read from state file: $DHSTATE"
@@ -138,7 +137,7 @@ if [[ -r "$PWSTATE" ]]; then
 fi
 
 # Assuming the `--force` option was used to initialize a new pool of
-# workers, then instances need to be configured with a staggered
+# runners, then instances need to be configured with a staggered
 # self-termination shutdown delay.  This prevents all the instances
 # from being terminated at the same time, potentially impacting
 # CI usage.
@@ -244,7 +243,7 @@ for _dhentry in "${_dhstate[@]}"; do
         PWPoolReady="absent"
     fi
 
-    # Mechanism for a developer to manually debug operations w/o fear of new tasks or instance shutdown.
+    # Mechanism for a developer to manually debug operations w/o fear of new jobs or instance shutdown.
     if [[ "$PWPoolReady" != "true" ]]; then
         pwst_msg "Instance disabled via tag 'PWPoolReady' == '$PWPoolReady'."
         set_pw_status setup disabled
@@ -259,13 +258,30 @@ for _dhentry in "${_dhstate[@]}"; do
             dbg "Attempting to stop shutdown sleep "
             $SSH ec2-user@$pub_dns pkill -u ec2-user -f "'bash -c sleep'"
 
+            dbg "Stopping service_pool.sh to prevent listener restart"
             if $SSH ec2-user@$pub_dns pgrep -u ec2-user -f service_pool.sh; then
+                $SSH ec2-user@$pub_dns pkill -u ec2-user -f service_pool.sh
                 sleep 10s  # Allow service_pool to exit gracefully
             fi
 
-            # N/B: This will not stop any currently running CI tasks.
-            dbg "Guarantee pool listener is dead"
-            $SSH ec2-user@$pub_dns sudo pkill -u ${name}-worker -f "'cirrus worker run'"
+            # Wait gracefully for any running jobs to complete before killing listener
+            dbg "Checking for running jobs"
+            if $SSH ec2-user@$pub_dns pgrep -u ${name}-worker -q -f "'Runner.Worker'"; then
+                timeout_seconds=$((60*60*2))  # 2 hours, same as shutdown.sh
+                wait_start=$(date +%s)
+                timeout_at=$((wait_start + timeout_seconds))
+                pwst_msg "Job currently running, waiting for completion (up to 2 hours)..."
+                while $SSH ec2-user@$pub_dns pgrep -u ${name}-worker -q -f "'Runner.Worker'"; do
+                    if [[ $(date +%s) -gt $timeout_at ]]; then
+                        pwst_warn "Timeout waiting for running job to complete after 2 hours"
+                        break
+                    fi
+                    sleep 60
+                done
+            fi
+
+            dbg "No running jobs detected, stopping listener"
+            $SSH ec2-user@$pub_dns sudo pkill -u ${name}-worker -f "'Runner.Listener'"
         )
         continue
     fi
@@ -284,7 +300,7 @@ for _dhentry in "${_dhstate[@]}"; do
             # don't play nicely with zsh.
             $SSH ec2-user@$pub_dns sudo chsh -s /bin/bash ec2-user &> /dev/null
 
-            if ! $SCP $SETUP_SCRIPT $SPOOL_SCRIPT $SHDWN_SCRIPT ec2-user@$pub_dns:/var/tmp/; then
+            if ! $SCP $SETUP_SCRIPT $SPOOL_SCRIPT $SHDWN_SCRIPT $CLEANUP_SCRIPT ec2-user@$pub_dns:/var/tmp/; then
                 pwst_warn "Could not scp scripts to instance $(ctx 0)."
                 continue  # try again next loop
             fi
@@ -319,11 +335,25 @@ for _dhentry in "${_dhstate[@]}"; do
                 continue  # try again next loop
             fi
 
+            pwst_msg "Obtaining runner registration token from GitHub."
+            # Get ephemeral registration token (1-hour expiry) from GitHub API
+            # This token is only used once during runner registration
+            REGISTRATION_TOKEN=$(curl -sS -X POST \
+                -H "Authorization: token $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                https://api.github.com/orgs/podman-container-tools/actions/runners/registration-token \
+                | jq -r '.token')
+
+            if [[ -z "$REGISTRATION_TOKEN" ]] || [[ "$REGISTRATION_TOKEN" == "null" ]]; then
+                pwst_warn "Failed to obtain registration token from GitHub API"
+                continue  # try again next loop
+            fi
+
             pwst_msg "Executing setup script."
             # Run setup script in background b/c it takes ~10m to complete.
             # N/B: This drops .setup.started and eventually (hopefully) .setup.done
             if ! $SSH ec2-user@$pub_dns \
-                    env POOLTOKEN=$POOLTOKEN \
+                    env REGISTRATION_TOKEN=$REGISTRATION_TOKEN \
                     bash -c "'/var/tmp/setup.sh $DH_REQ_TAG:\ $DH_REQ_VAL' </dev/null >>setup.log 2>&1 &"; then
                 # This is critical, no easy way to determine what broke.
                 force_term "Failed to start background setup script"
@@ -368,9 +398,9 @@ for _dhentry in "${_dhstate[@]}"; do
         continue
     fi
 
-    dbg "Checking cirrus listener"
+    dbg "Checking GitHub Actions runner"
     state_fault=0
-    if ! $SSH ec2-user@$pub_dns pgrep -u "${name}-worker" -q -f "'cirrus worker run'"; then
+    if ! $SSH ec2-user@$pub_dns pgrep -u "${name}-worker" -q -f "'Runner.Listener'"; then
         # Don't try to examine prior state if there was none.
         if ((n_pw_total)); then
             for _pwentry in "${_pwstate[@]}"; do
@@ -393,55 +423,57 @@ for _dhentry in "${_dhstate[@]}"; do
 
         # Previous state didn't exist, or listener status was 'alive'.
         # Process may have simply crashed, allow service_pool.sh time to restart it.
-        pwst_warn "Cirrus worker listener process NOT running, will recheck again $(ctx 0)."
-        # service_pool.sh should catch this and restart the listener. If not, the next time
+        pwst_warn "GitHub Actions runner process NOT running, will recheck again $(ctx 0)."
+        # service_pool.sh should catch this and restart the runner. If not, the next time
         # through this loop will force_term() the instance.
-        set_pw_status listener dead  # service_pool.sh should restart listener
+        set_pw_status listener dead  # service_pool.sh should restart runner
         continue
     else
         set_pw_status listener alive
     fi
 
     dbg "Checking worker log"
-    logpath="/private/tmp/${name}-worker.log"  # set in setup.sh
+    # GitHub Actions runner log path: /private/tmp/<hostname>-worker.log
+    # e.g., /private/tmp/MacM1-1-worker.log (defined in setup.sh and service_pool.sh)
+    logpath="/private/tmp/${name}-worker.log"
     if ! $SSH ec2-user@$pub_dns cat "'$logpath'" &> "$logoutput"; then
         # The "${name}-worker" user has write access to this log
         force_term "Missing worker log $logpath."
         continue
     fi
 
-    dbg "Checking worker registration"
+    dbg "Checking runner registration"
     # First lines of log should always match this
-    if ! head -10 "$logoutput" | grep -q 'worker successfully registered'; then
+    if ! head -10 "$logoutput" | grep -q 'Connected to GitHub'; then
         # This could signal log manipulation by worker user, or it could be harmless.
         pwst_warn "Missing registration log entry"
     fi
 
     # The CI user has write-access to this log file on the instance,
     # make this known to humans in case they care.
-    n_started_tasks=$(grep -Ei 'started task [0-9]+' "$logoutput" | wc -l) || true
-    n_finished_tasks=$(grep -Ei 'task [0-9]+ completed' "$logoutput" | wc -l) || true
+    n_started_tasks=$(grep -Ei 'Running job:' "$logoutput" | wc -l) || true
+    n_finished_tasks=$(grep -Ei 'Job .* completed with result:' "$logoutput" | wc -l) || true
     set_pw_status tasks $n_started_tasks
     set_pw_status taskf $n_finished_tasks
 
-    msg "Apparent tasks started/finished/running: $n_started_tasks $n_finished_tasks $((n_started_tasks-n_finished_tasks)) (max $PW_MAX_TASKS)"
+    msg "Apparent jobs started/finished/running: $n_started_tasks $n_finished_tasks $((n_started_tasks-n_finished_tasks)) (max $PW_MAX_TASKS)"
 
-    dbg "Checking apparent task limit"
-    # N/B: This is only enforced based on the _previous_ run of this script worker-count.
-    #      Doing this on the _current_ alive worker count would add a lot of complexity.
+    dbg "Checking apparent job limit"
+    # N/B: This is only enforced based on the _previous_ run of this script runner-count.
+    #      Doing this on the _current_ alive runner count would add a lot of complexity.
     if [[ "$n_finished_tasks" -gt $PW_MAX_TASKS ]] && [[ $n_pw_total -gt $PW_MIN_ALIVE ]]; then
-        # N/B: Termination based on _finished_ tasks, so if a task happens to be currently running
-        #      it will very likely have _just_ started in the last few seconds.  Cirrus will retry
-        #      automatically on another worker.
-        force_term "Instance exceeded $PW_MAX_TASKS apparent tasks."
+        # N/B: Termination based on _finished_ jobs, so if a job happens to be currently running
+        #      it will very likely have _just_ started in the last few seconds.  GitHub Actions will retry
+        #      automatically on another runner.
+        force_term "Instance exceeded $PW_MAX_TASKS apparent jobs."
     elif [[ $n_pw_total -le $PW_MIN_ALIVE ]]; then
-        pwst_warn "Not enforcing max-tasks limit, only $n_pw_total workers online last run."
+        pwst_warn "Not enforcing max-jobs limit, only $n_pw_total runners online last run."
     fi
 done
 
 _I=""
 msg " "
-msg "Processing all persistent worker states."
+msg "Processing all runner states."
 for _dhentry in "${_dhstate[@]}"; do
     read -r name otherstuff<<<"$_dhentry"
     _f1=$name

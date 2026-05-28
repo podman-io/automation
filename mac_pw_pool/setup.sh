@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# Setup and launch Cirrus-CI PW Pool node.  It must be called
-# with the env. var. `$POOLTOKEN` set.  It is assumed to be
+# Setup and launch GitHub Actions runner node.  It must be called
+# with the env. var. `$REGISTRATION_TOKEN` set.  It is assumed to be
 # running on a fresh AWS EC2 mac2.metal instance as `ec2-user`
 # The instance must have both "metadata" and "Allow tags in
 # metadata" options enabled.  The instance must set the
 # "terminate" option for "shutdown behavior".
 #
 # This script should be called with a single argument string,
-# of the label YAML to configure.  For example "purpose: prod"
+# of the runner label to configure.  For example "purpose: prod"
 #
 # N/B: Under special circumstances, this script (possibly with modifications)
 # can be executed more than once.  All operations which modify state/config.
@@ -26,8 +26,8 @@ PWREADYURL="http://instance-data/latest/meta-data/tags/instance/PWPoolReady"
 PWREADY=$(curl -sSLf $PWREADYURL)
 
 PWUSER=$PWNAME-worker
-rm -f /private/tmp/*_cfg_*
-PWCFG=$(mktemp /private/tmp/${PWNAME}_cfg_XXXXXXXX)
+# GitHub Actions runner log path: /private/tmp/<hostname>-worker.log
+# e.g., /private/tmp/MacM1-1-worker.log
 PWLOG="/private/tmp/${PWUSER}.log"
 
 msg() { echo "##### ${1:-No message message provided}"; }
@@ -40,14 +40,14 @@ die_if_empty() {
         die "Unexpectedly empty instance '$tagname' tag, is metadata tag access enabled?"
 }
 
-[[ -n "$POOLTOKEN" ]] || \
-    die "Must be called with non-empty \$POOLTOKEN set."
-
 [[ "$#" -ge 1 ]] || \
     die "Must be called with a 'label: value' string argument"
 
 echo "$1" | grep -i -q -E '^[a-z0-9]+:[ ]?[a-z0-9]+' || \
     die "First argument must be a string in the format 'name: value'. Not: '$1'"
+
+[[ -n "$REGISTRATION_TOKEN" ]] || \
+    die "REGISTRATION_TOKEN environment variable is not set"
 
 msg "Configuring pool worker for '$1' tasks."
 
@@ -89,9 +89,6 @@ if [[ ! -x /usr/local/bin/gvproxy ]]; then
     )
 
     brew_formulas=(
-        # Necessary for worker-pool participation + task execution
-        cirruslabs/cli/cirrus
-
         # Necessary for building podman|buildah|skopeo
         go go-md2man coreutils pkg-config pstree gpgme
 
@@ -103,6 +100,9 @@ if [[ ! -x /usr/local/bin/gvproxy ]]; then
 
         # Necessary for podman-machine libkrun CI testing
         krunkit
+
+        # Necessary for GitHub API calls
+        jq
     )
 
     # msg() includes a ##### prefix, ensure this text is simply
@@ -184,6 +184,71 @@ if ! mount | grep -q "$PWUSER"; then
     sudo pkill -u $PWUSER || true
 fi
 
+msg "Installing GitHub Actions runner"
+RUNNER_DIR="/Users/$PWUSER/actions-runner"
+# Download and install runner if directory doesn't exist or is incomplete
+if [[ ! -d "$RUNNER_DIR" ]] || [[ ! -x "$RUNNER_DIR/config.sh" ]]; then
+    # Get the latest runner version for macOS ARM64 with retry on failure
+    RUNNER_VERSION=""
+    for attempt in 1 2 3; do
+        if RUNNER_VERSION=$(curl -sSfL https://api.github.com/repos/actions/runner/releases/latest | jq -r '.tag_name' | sed 's/^v//'); then
+            [[ -n "$RUNNER_VERSION" ]] && break
+        fi
+        if [[ $attempt -lt 3 ]]; then
+            sleep_time=$((attempt * 5))
+            msg "Failed to fetch runner version (attempt $attempt/3), retrying in ${sleep_time}s..."
+            sleep $sleep_time
+        fi
+    done
+
+    [[ -n "$RUNNER_VERSION" ]] || \
+        die "Failed to obtain GitHub Actions runner version after 3 attempts"
+
+    RUNNER_FILE="actions-runner-osx-arm64-${RUNNER_VERSION}.tar.gz"
+    RUNNER_URL="https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/${RUNNER_FILE}"
+
+    msg "Downloading GitHub Actions runner v${RUNNER_VERSION}"
+    curl -sSLfO "$RUNNER_URL"
+
+    # Create runner directory owned by the worker user
+    sudo mkdir -p "$RUNNER_DIR"
+    sudo chown $PWUSER:staff "$RUNNER_DIR"
+
+    # Extract as the worker user
+    sudo -u $PWUSER tar xzf "$RUNNER_FILE" -C "$RUNNER_DIR"
+    rm "$RUNNER_FILE"
+fi
+
+msg "Installing cleanup script"
+CLEANUP_SCRIPT="/var/tmp/cleanup.sh"
+if [[ ! -r "$CLEANUP_SCRIPT" ]]; then
+    die "Cleanup script not found at $CLEANUP_SCRIPT"
+fi
+
+msg "Registering GitHub Actions runner"
+RUNNER_CONFIG_FILE="$RUNNER_DIR/.runner"
+if [[ ! -r "$RUNNER_CONFIG_FILE" ]]; then
+    msg "Registering runner '$PWNAME'"
+    # Configure the runner (but don't start it - service_pool.sh will do that)
+    # Work directory matches Cirrus pattern: /Users/$PWUSER/ci
+    # --replace automatically removes any existing runner with the same name
+    sudo -u $PWUSER bash -c "cd $RUNNER_DIR && ./config.sh \
+        --unattended \
+        --replace \
+        --url https://github.com/podman-container-tools \
+        --token $REGISTRATION_TOKEN \
+        --name $PWNAME \
+        --runnergroup mac-pool \
+        --work /Users/$PWUSER/ci"
+
+    # Configure job hooks for pre/post cleanup
+    msg "Configuring job hooks"
+    sudo -u $PWUSER bash -c "cat > $RUNNER_DIR/.env" <<'EOF'
+ACTIONS_RUNNER_HOOK_JOB_STARTED=/var/tmp/cleanup.sh
+ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/var/tmp/cleanup.sh
+EOF
+fi
+
 msg "Setting up Rosetta"
 # Rosetta 2 enables arm64 Mac to use Intel Apps.  Only install if not present.
 if ! arch -arch x86_64 /usr/bin/uname -m; then
@@ -210,22 +275,6 @@ if [[ ! -L /usr/local/bin/softwareupdate ]]; then
     sudo ln -sf /usr/bin/false /usr/local/bin/softwareupdate
 fi
 
-# FIXME: Semi-secret POOLTOKEN value should not be in this file.
-# ref: https://github.com/cirruslabs/cirrus-cli/discussions/662
-cat << EOF | sudo tee $PWCFG > /dev/null
----
-name: "$PWNAME"
-token: "$POOLTOKEN"
-labels:
-  $1
-log:
-  file: "${PWLOG}"
-security:
-  allowed-isolations:
-    none: {}
-EOF
-sudo chown ${USER}:staff $PWCFG
-
 # Monitored by instance launch script
 echo "# Log created $(date -u -Iseconds) - do not manually remove or modify!" > $PWLOG
 sudo chown ${USER}:staff $PWLOG
@@ -233,7 +282,6 @@ sudo chmod g+rw $PWLOG
 
 if ! pgrep -q -f service_pool.sh; then
     # Allow service_pool.sh access to these values
-    export PWCFG
     export PWUSER
     export PWREADYURL
     export PWREADY
