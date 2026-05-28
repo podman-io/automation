@@ -8,7 +8,7 @@ set -o pipefail
 msg() { echo "##### ${1:-No message message provided}"; }
 die() { echo "ERROR: ${1:-No error message provided}"; exit 1; }
 
-for varname in PWUSER PWREADYURL PWREADY GITHUB_TOKEN; do
+for varname in PWUSER PWREADYURL PWREADY; do
     varval="${!varname}"
     [[ -n "$varval" ]] || \
         die "Env. var. \$$varname is unset/empty."

@@ -318,11 +318,25 @@ for _dhentry in "${_dhstate[@]}"; do
                 continue  # try again next loop
             fi
 
+            pwst_msg "Obtaining runner registration token from GitHub."
+            # Get ephemeral registration token (1-hour expiry) from GitHub API
+            # This token is only used once during runner registration
+            REGISTRATION_TOKEN=$(curl -sS -X POST \
+                -H "Authorization: token $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                https://api.github.com/orgs/podman-io/actions/runners/registration-token \
+                | jq -r '.token')
+
+            if [[ -z "$REGISTRATION_TOKEN" ]] || [[ "$REGISTRATION_TOKEN" == "null" ]]; then
+                pwst_warn "Failed to obtain registration token from GitHub API"
+                continue  # try again next loop
+            fi
+
             pwst_msg "Executing setup script."
             # Run setup script in background b/c it takes ~10m to complete.
             # N/B: This drops .setup.started and eventually (hopefully) .setup.done
             if ! $SSH ec2-user@$pub_dns \
-                    env GITHUB_TOKEN=$GITHUB_TOKEN \
+                    env REGISTRATION_TOKEN=$REGISTRATION_TOKEN \
                     bash -c "'/var/tmp/setup.sh $DH_REQ_TAG:\ $DH_REQ_VAL' </dev/null >>setup.log 2>&1 &"; then
                 # This is critical, no easy way to determine what broke.
                 force_term "Failed to start background setup script"

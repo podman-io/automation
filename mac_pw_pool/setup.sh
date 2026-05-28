@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Setup and launch GitHub Actions runner node.  It must be called
-# with the env. var. `$GITHUB_TOKEN` set.  It is assumed to be
+# with the env. var. `$REGISTRATION_TOKEN` set.  It is assumed to be
 # running on a fresh AWS EC2 mac2.metal instance as `ec2-user`
 # The instance must have both "metadata" and "Allow tags in
 # metadata" options enabled.  The instance must set the
@@ -202,25 +202,16 @@ fi
 msg "Registering GitHub Actions runner"
 RUNNER_CONFIG_FILE="$RUNNER_DIR/.runner"
 if [[ ! -r "$RUNNER_CONFIG_FILE" ]]; then
-    [[ -n "$GITHUB_TOKEN" ]] || \
-        die "GITHUB_TOKEN environment variable is not set"
-
-    # Get a registration token from GitHub
-    msg "Obtaining runner registration token from GitHub"
-    REGISTRATION_TOKEN=$(curl -sS -X POST \
-        -H "Authorization: token $GITHUB_TOKEN" \
-        -H "Accept: application/vnd.github+json" \
-        https://api.github.com/orgs/podman-io/actions/runners/registration-token \
-        | jq -r '.token')
-
-    [[ -n "$REGISTRATION_TOKEN" ]] && [[ "$REGISTRATION_TOKEN" != "null" ]] || \
-        die "Failed to obtain registration token from GitHub API"
+    [[ -n "$REGISTRATION_TOKEN" ]] || \
+        die "REGISTRATION_TOKEN environment variable is not set"
 
     msg "Registering runner '$PWNAME'"
     # Configure the runner (but don't start it - service_pool.sh will do that)
     # Work directory matches Cirrus pattern: /Users/$PWUSER/ci
+    # --replace automatically removes any existing runner with the same name
     sudo -u $PWUSER bash -c "cd $RUNNER_DIR && ./config.sh \
         --unattended \
+        --replace \
         --url https://github.com/podman-io \
         --token $REGISTRATION_TOKEN \
         --name $PWNAME \
@@ -264,7 +255,6 @@ if ! pgrep -q -f service_pool.sh; then
     export PWUSER
     export PWREADYURL
     export PWREADY
-    export GITHUB_TOKEN
     msg "Spawning listener supervisor process."
     /var/tmp/service_pool.sh </dev/null >>setup.log 2>&1 &
     disown %-1
