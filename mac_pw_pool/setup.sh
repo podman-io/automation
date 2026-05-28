@@ -26,6 +26,8 @@ PWREADYURL="http://instance-data/latest/meta-data/tags/instance/PWPoolReady"
 PWREADY=$(curl -sSLf $PWREADYURL)
 
 PWUSER=$PWNAME-worker
+# GitHub Actions runner log path: /private/tmp/<hostname>-worker.log
+# e.g., /private/tmp/MacM1-1-worker.log
 PWLOG="/private/tmp/${PWUSER}.log"
 
 msg() { echo "##### ${1:-No message message provided}"; }
@@ -43,6 +45,9 @@ die_if_empty() {
 
 echo "$1" | grep -i -q -E '^[a-z0-9]+:[ ]?[a-z0-9]+' || \
     die "First argument must be a string in the format 'name: value'. Not: '$1'"
+
+[[ -n "$REGISTRATION_TOKEN" ]] || \
+    die "REGISTRATION_TOKEN environment variable is not set"
 
 msg "Configuring pool worker for '$1' tasks."
 
@@ -181,9 +186,24 @@ fi
 
 msg "Installing GitHub Actions runner"
 RUNNER_DIR="/Users/$PWUSER/actions-runner"
-if [[ ! -d "$RUNNER_DIR" ]]; then
-    # Get the latest runner version for macOS ARM64
-    RUNNER_VERSION=$(curl -sS https://api.github.com/repos/actions/runner/releases/latest | jq -r '.tag_name' | sed 's/^v//')
+# Download and install runner if directory doesn't exist or is incomplete
+if [[ ! -d "$RUNNER_DIR" ]] || [[ ! -x "$RUNNER_DIR/config.sh" ]]; then
+    # Get the latest runner version for macOS ARM64 with retry on failure
+    RUNNER_VERSION=""
+    for attempt in 1 2 3; do
+        if RUNNER_VERSION=$(curl -sSfL https://api.github.com/repos/actions/runner/releases/latest | jq -r '.tag_name' | sed 's/^v//'); then
+            [[ -n "$RUNNER_VERSION" ]] && break
+        fi
+        if [[ $attempt -lt 3 ]]; then
+            sleep_time=$((attempt * 5))
+            msg "Failed to fetch runner version (attempt $attempt/3), retrying in ${sleep_time}s..."
+            sleep $sleep_time
+        fi
+    done
+
+    [[ -n "$RUNNER_VERSION" ]] || \
+        die "Failed to obtain GitHub Actions runner version after 3 attempts"
+
     RUNNER_FILE="actions-runner-osx-arm64-${RUNNER_VERSION}.tar.gz"
     RUNNER_URL="https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/${RUNNER_FILE}"
 
@@ -202,9 +222,6 @@ fi
 msg "Registering GitHub Actions runner"
 RUNNER_CONFIG_FILE="$RUNNER_DIR/.runner"
 if [[ ! -r "$RUNNER_CONFIG_FILE" ]]; then
-    [[ -n "$REGISTRATION_TOKEN" ]] || \
-        die "REGISTRATION_TOKEN environment variable is not set"
-
     msg "Registering runner '$PWNAME'"
     # Configure the runner (but don't start it - service_pool.sh will do that)
     # Work directory matches Cirrus pattern: /Users/$PWUSER/ci

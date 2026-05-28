@@ -416,7 +416,9 @@ for _dhentry in "${_dhstate[@]}"; do
     fi
 
     dbg "Checking worker log"
-    logpath="/private/tmp/${name}-worker.log"  # set in setup.sh
+    # GitHub Actions runner log path: /private/tmp/<hostname>-worker.log
+    # e.g., /private/tmp/MacM1-1-worker.log (defined in setup.sh and service_pool.sh)
+    logpath="/private/tmp/${name}-worker.log"
     if ! $SSH ec2-user@$pub_dns cat "'$logpath'" &> "$logoutput"; then
         # The "${name}-worker" user has write access to this log
         force_term "Missing worker log $logpath."

@@ -34,6 +34,8 @@ sudo pkill -u $PWUSER -f "Runner.Listener" || true
 # envar exported to us
 # shellcheck disable=SC2154
 RUNNER_DIR="/Users/$PWUSER/actions-runner"
+# GitHub Actions runner log path: /private/tmp/<hostname>-worker.log
+# e.g., /private/tmp/MacM1-1-worker.log
 PWLOG="/private/tmp/${PWUSER}.log"
 
 while [[ "$PWREADY" == "true" ]]; do  # Change tag to shutdown this "service"
